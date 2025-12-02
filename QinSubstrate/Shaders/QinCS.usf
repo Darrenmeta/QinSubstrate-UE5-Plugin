@@ -1,0 +1,70 @@
+// QinCS.usf - 2D Qin substrate compute shader
+
+Texture2D<float> QinState   : register(t0);
+SamplerState     QinSampler : register(s0);
+
+Texture2D<float> MaskTex    : register(t1);
+SamplerState     MaskSampler: register(s1);
+
+RWTexture2D<float> OutTexture : register(u0);
+
+cbuffer QinParams : register(b0)
+{
+    float2 TextureSize;
+    float  Eta;
+    float  Beta;
+    float  Gamma;
+    float  UOn;
+    float  UOff;
+};
+
+float Laplacian2D(int2 coord)
+{
+    int2 size;
+    QinState.GetDimensions(size.x, size.y);
+
+    int2 up    = int2(coord.x, coord.y - 1);
+    int2 down  = int2(coord.x, coord.y + 1);
+    int2 left  = int2(coord.x - 1, coord.y);
+    int2 right = int2(coord.x + 1, coord.y);
+
+    up    = clamp(up,    int2(0,0), size-1);
+    down  = clamp(down,  int2(0,0), size-1);
+    left  = clamp(left,  int2(0,0), size-1);
+    right = clamp(right, int2(0,0), size-1);
+
+    float center = QinState.Load(int3(coord,0));
+    float sum =
+        QinState.Load(int3(up,0)) +
+        QinState.Load(int3(down,0)) +
+        QinState.Load(int3(left,0)) +
+        QinState.Load(int3(right,0));
+
+    return sum - 4.0 * center;
+}
+
+[numthreads(8, 8, 1)]
+void MainCS(uint3 DTid : SV_DispatchThreadID)
+{
+    int2 coord = int2(DTid.xy);
+    int2 size;
+    QinState.GetDimensions(size.x, size.y);
+
+    if (coord.x >= size.x || coord.y >= size.y)
+        return;
+
+    float u_center = QinState.Load(int3(coord,0));
+    float lap = Laplacian2D(coord);
+
+    float u_diff = u_center + Eta * lap;
+
+    float u_nl = 0.5 * (1.0 + tanh(Beta * (u_diff - 0.5)));
+
+    float m = MaskTex.Load(int3(coord,0));
+    float u_target = (m > 0.5) ? UOn : UOff;
+
+    float u_new = (1.0 - Gamma) * u_nl + Gamma * u_target;
+    u_new = clamp(u_new, 0.0, 1.0);
+
+    OutTexture[coord] = u_new;
+}
